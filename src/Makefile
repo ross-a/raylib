@@ -54,10 +54,10 @@ RAYLIB_SRC_PATH      ?= ../src
 RAYLIB_RELEASE_PATH  ?= $(RAYLIB_SRC_PATH)
 
 # Library type used for raylib: STATIC (.a) or SHARED (.so/.dll)
-RAYLIB_LIBTYPE       ?= STATIC
+RAYLIB_LIBTYPE       ?= SHARED
 
 # Build mode for library: DEBUG or RELEASE
-RAYLIB_BUILD_MODE    ?= RELEASE
+RAYLIB_BUILD_MODE    ?= DEBUG
 
 # Build output name for the library
 RAYLIB_LIB_NAME      ?= raylib
@@ -73,7 +73,7 @@ PLATFORM             ?= PLATFORM_DESKTOP
 # NOTE: Some programs like tools could not require those modules
 RAYLIB_MODULE_AUDIO  ?= TRUE
 RAYLIB_MODULE_MODELS ?= TRUE
-RAYLIB_MODULE_RAYGUI ?= FALSE
+RAYLIB_MODULE_RAYGUI ?= TRUE
 RAYLIB_MODULE_PHYSAC ?= FALSE
 
 RAYLIB_MODULE_RAYGUI_PATH ?= $(RAYLIB_SRC_PATH)/../../raygui/src
@@ -160,14 +160,9 @@ ifeq ($(PLATFORM),PLATFORM_WEB)
     EMSDK_PATH         ?= C:/emsdk
     EMSCRIPTEN_PATH    ?= $(EMSDK_PATH)/upstream/emscripten
     CLANG_PATH          = $(EMSDK_PATH)/upstream/bin
-    PYTHON_PATH         = $(EMSDK_PATH)/python/3.9.2-1_64bit
-    NODE_PATH           = $(EMSDK_PATH)/node/14.15.5_64bit/bin
-
-    ifeq ($(PLATFORM_OS),WINDOWS)
-        export PATH = $(EMSDK_PATH);$(EMSCRIPTEN_PATH);$(CLANG_PATH);$(NODE_PATH);$(PYTHON_PATH);C:\raylib\MinGW\bin:$$(PATH)
-    else
-        export PATH := $(EMSDK_PATH):$(EMSCRIPTEN_PATH):$(CLANG_PATH):$(NODE_PATH):$(PYTHON_PATH):$(PATH)
-    endif
+    PYTHON_PATH         = $(EMSDK_PATH)/python/3.7.4-pywin32_64bit
+    NODE_PATH           = $(EMSDK_PATH)/node/12.18.1_64bit/bin
+    export PATH         = $(EMSDK_PATH);$(EMSCRIPTEN_PATH);$(CLANG_PATH);$(NODE_PATH);$(PYTHON_PATH);C:\raylib\MinGW\bin:$$(PATH)
 endif
 
 ifeq ($(PLATFORM),PLATFORM_ANDROID)
@@ -208,7 +203,8 @@ endif
 # Define raylib graphics api depending on selected platform
 ifeq ($(PLATFORM),PLATFORM_DESKTOP)
     # By default use OpenGL 3.3 on desktop platforms
-    GRAPHICS ?= GRAPHICS_API_OPENGL_33
+		GRAPHICS ?= GRAPHICS_API_OPENGL_46
+    #GRAPHICS ?= GRAPHICS_API_OPENGL_33
     #GRAPHICS = GRAPHICS_API_OPENGL_11  # Uncomment to use OpenGL 1.1
     #GRAPHICS = GRAPHICS_API_OPENGL_21  # Uncomment to use OpenGL 2.1
 endif
@@ -230,8 +226,8 @@ ifeq ($(PLATFORM),PLATFORM_ANDROID)
 endif
 
 # Define default C compiler and archiver to pack library
-CC = gcc
-AR = ar
+CC = clang
+AR = llvm-ar
 
 ifeq ($(PLATFORM),PLATFORM_DESKTOP)
     ifeq ($(PLATFORM_OS),OSX)
@@ -288,7 +284,7 @@ endif
 #  -D_DEFAULT_SOURCE        use with -std=c99 on Linux and PLATFORM_WEB, required for timespec
 #  -Werror=pointer-arith    catch unportable code that does direct arithmetic on void pointers
 #  -fno-strict-aliasing     jar_xm.h does shady stuff (breaks strict aliasing)
-CFLAGS += -Wall -D_DEFAULT_SOURCE -Wno-missing-braces -Werror=pointer-arith -fno-strict-aliasing
+CFLAGS += -Wall -D_DEFAULT_SOURCE -Wno-missing-braces -Werror=pointer-arith -fno-strict-aliasing -march=x86-64 -msse3 -O3
 
 ifeq ($(PLATFORM), PLATFORM_WEB)
     CFLAGS += -std=gnu99
@@ -368,7 +364,11 @@ ifeq ($(RAYLIB_LIBTYPE),SHARED)
     # make sure code is compiled as position independent
     # BE CAREFUL: It seems that for gcc -fpic is not the same as -fPIC
     # MinGW32 just doesn't need -fPIC, it shows warnings
-    CFLAGS += -fPIC -DBUILD_LIBTYPE_SHARED
+    ifeq ($(PLATFORM_OS), LINUX)
+	    CFLAGS += -fPIC -DBUILD_LIBTYPE_SHARED
+		else
+	    CFLAGS += -DBUILD_LIBTYPE_SHARED
+		endif
 endif
 ifeq ($(PLATFORM),PLATFORM_DRM)
     # without EGL_NO_X11 eglplatform.h tears Xlib.h in which tears X.h in
@@ -500,8 +500,8 @@ else
         ifeq ($(PLATFORM),PLATFORM_DESKTOP)
             ifeq ($(PLATFORM_OS),WINDOWS)
                 # NOTE: Linking with provided resource file
-				$(CC) -shared -o $(RAYLIB_RELEASE_PATH)/$(RAYLIB_LIB_NAME).dll $(OBJS) $(RAYLIB_RES_FILE) $(LDFLAGS) -static-libgcc -lopengl32 -lgdi32 -lwinmm -Wl,--out-implib,$(RAYLIB_RELEASE_PATH)/lib$(RAYLIB_LIB_NAME)dll.a
-				@echo "raylib dynamic library ($(RAYLIB_LIB_NAME).dll) and import library (lib$(RAYLIB_LIB_NAME)dll.a) generated!"
+				$(CC) -shared -o $(RAYLIB_RELEASE_PATH)/$(RAYLIB_LIB_NAME).dll $(OBJS) $(RAYLIB_RES_FILE) $(LDFLAGS) -static-libgcc -lopengl32 -lgdi32 -lwinmm -Wl,--out-implib:$(RAYLIB_RELEASE_PATH)/$(RAYLIB_LIB_NAME).lib
+				@echo "raylib dynamic library ($(RAYLIB_LIB_NAME).dll) and import library ($(RAYLIB_LIB_NAME).lib) generated!"
             endif
             ifeq ($(PLATFORM_OS),LINUX)
                 # Compile raylib shared library version $(RAYLIB_VERSION).
@@ -695,11 +695,15 @@ endif
 # Clean everything
 clean:
 ifeq ($(PLATFORM_OS),WINDOWS)
-	del *.o /s
+	rm -f *.o
 	cd $(RAYLIB_RELEASE_PATH)
-	del lib$(RAYLIB_LIB_NAME).a /s
-	del lib$(RAYLIB_LIB_NAME)dll.a /s
-	del $(RAYLIB_LIB_NAME).dll /s
+	rm -f lib$(RAYLIB_LIB_NAME).a
+	rm -f lib$(RAYLIB_LIB_NAME)dll.a
+	rm -f $(RAYLIB_LIB_NAME).dll
+# remake resource data files
+	@echo "remake resource data files"
+	windres raylib.rc -O coff raylib.rc.data
+	windres raylib.dll.rc -O coff raylib.dll.rc.data
 else
 	rm -fv *.o $(RAYLIB_RELEASE_PATH)/lib$(RAYLIB_LIB_NAME).a $(RAYLIB_RELEASE_PATH)/lib$(RAYLIB_LIB_NAME).bc $(RAYLIB_RELEASE_PATH)/lib$(RAYLIB_LIB_NAME).so*
 endif

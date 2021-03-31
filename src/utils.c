@@ -11,7 +11,7 @@
 *
 *   LICENSE: zlib/libpng
 *
-*   Copyright (c) 2014-2021 Ramon Santamaria (@raysan5)
+*   Copyright (c) 2014-2020 Ramon Santamaria (@raysan5)
 *
 *   This software is provided "as-is", without any express or implied warranty. In no event
 *   will the authors be held liable for any damages arising from the use of this software.
@@ -46,7 +46,7 @@
 #endif
 
 #include <stdlib.h>                     // Required for: exit()
-#include <stdio.h>                      // Required for: FILE, fopen(), fseek(), ftell(), fread(), fwrite(), fprintf(), vprintf(), fclose()
+#include <stdio.h>                      // Required for: vprintf()
 #include <stdarg.h>                     // Required for: va_list, va_start(), va_end()
 #include <string.h>                     // Required for: strcpy(), strcat()
 
@@ -63,22 +63,12 @@
 //----------------------------------------------------------------------------------
 // Global Variables Definition
 //----------------------------------------------------------------------------------
-static int logTypeLevel = LOG_INFO;                 // Minimum log type level
 
-static TraceLogCallback traceLog = NULL;            // TraceLog callback function pointer
-static LoadFileDataCallback loadFileData = NULL;    // LoadFileData callback funtion pointer
-static SaveFileDataCallback saveFileData = NULL;    // SaveFileText callback funtion pointer
-static LoadFileTextCallback loadFileText = NULL;    // LoadFileText callback funtion pointer
-static SaveFileTextCallback saveFileText = NULL;    // SaveFileText callback funtion pointer
-
-//----------------------------------------------------------------------------------
-// Functions to set internal callbacks
-//----------------------------------------------------------------------------------
-void SetTraceLogCallback(TraceLogCallback callback) { traceLog = callback; }              // Set custom trace log
-void SetLoadFileDataCallback(LoadFileDataCallback callback) { loadFileData = callback; }  // Set custom file data loader
-void SetSaveFileDataCallback(SaveFileDataCallback callback) { saveFileData = callback; }  // Set custom file data saver
-void SetLoadFileTextCallback(LoadFileTextCallback callback) { loadFileText = callback; }  // Set custom file text loader
-void SetSaveFileTextCallback(SaveFileTextCallback callback) { saveFileText = callback; }  // Set custom file text saver
+// Log types messages
+static int logTypeLevel = LOG_INFO;                     // Minimum log type level
+static int logTypeExit = LOG_ERROR;                     // Log type that exits
+static TraceLogCallback logCallback = NULL;             // Log callback function pointer
+static TraceLogCallbackNoVa logCallbackNoVa = NULL;     // Log callback function pointer
 
 
 #if defined(PLATFORM_ANDROID)
@@ -104,7 +94,27 @@ static int android_close(void *cookie);
 //----------------------------------------------------------------------------------
 
 // Set the current threshold (minimum) log level
-void SetTraceLogLevel(int logType) { logTypeLevel = logType; }
+void SetTraceLogLevel(int logType)
+{
+    logTypeLevel = logType;
+}
+
+// Set the exit threshold (minimum) log level
+void SetTraceLogExit(int logType)
+{
+    logTypeExit = logType;
+}
+
+// Set a trace log callback to enable custom logging
+void SetTraceLogCallback(TraceLogCallback callback)
+{
+    logCallback = callback;
+}
+// Set a trace log callback to enable custom logging
+void SetTraceLogCallbackNoVa(TraceLogCallbackNoVa callback)
+{
+    logCallbackNoVa = callback;
+}
 
 // Show trace log messages (LOG_INFO, LOG_WARNING, LOG_ERROR, LOG_DEBUG)
 void TraceLog(int logType, const char *text, ...)
@@ -116,11 +126,20 @@ void TraceLog(int logType, const char *text, ...)
     va_list args;
     va_start(args, text);
 
-    if (traceLog)
+    if (logCallback)
     {
-        traceLog(logType, text, args);
+        logCallback(logType, text, args);
         va_end(args);
         return;
+    } else if (logCallbackNoVa) {
+	    char buffer[MAX_TRACELOG_MSG_LENGTH] = { 0 };
+	    char outbuf[MAX_TRACELOG_MSG_LENGTH] = { 0 };
+
+	    strcat(buffer, text);
+	    vsprintf(outbuf, buffer, args);
+	    logCallbackNoVa(logType, outbuf);
+	    va_end(args);
+	    return;
     }
 
 #if defined(PLATFORM_ANDROID)
@@ -155,24 +174,15 @@ void TraceLog(int logType, const char *text, ...)
 
     va_end(args);
 
-    if (logType == LOG_ERROR) exit(1);  // If error, exit program
+    if (logType >= logTypeExit) exit(1); // If exit message, exit program
 
 #endif  // SUPPORT_TRACELOG
 }
 
 // Internal memory allocator
-// NOTE: Initializes to zero by default
 void *MemAlloc(int size)
 {
-    void *ptr = RL_CALLOC(size, 1);
-    return ptr;
-}
-
-// Internal memory reallocator
-void *MemRealloc(void *ptr, int size)
-{
-    void *ret = RL_REALLOC(ptr, size);
-    return ret;
+    return RL_MALLOC(size);
 }
 
 // Internal memory free
@@ -189,12 +199,6 @@ unsigned char *LoadFileData(const char *fileName, unsigned int *bytesRead)
 
     if (fileName != NULL)
     {
-        if (loadFileData) 
-        {
-            data = loadFileData(fileName, bytesRead);
-            return data;
-        }
-#if defined(SUPPORT_STANDARD_FILEIO)
         FILE *file = fopen(fileName, "rb");
 
         if (file != NULL)
@@ -221,9 +225,6 @@ unsigned char *LoadFileData(const char *fileName, unsigned int *bytesRead)
             fclose(file);
         }
         else TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to open file", fileName);
-#else
-    TRACELOG(LOG_WARNING, "FILEIO: Standard file io not supported, use custom file callback");
-#endif
     }
     else TRACELOG(LOG_WARNING, "FILEIO: File name provided is not valid");
 
@@ -243,12 +244,6 @@ bool SaveFileData(const char *fileName, void *data, unsigned int bytesToWrite)
 
     if (fileName != NULL)
     {
-        if (saveFileData) 
-        {
-            saveFileData(fileName, data, bytesToWrite);
-            return success;
-        }
-#if defined(SUPPORT_STANDARD_FILEIO)
         FILE *file = fopen(fileName, "wb");
 
         if (file != NULL)
@@ -263,9 +258,6 @@ bool SaveFileData(const char *fileName, void *data, unsigned int bytesToWrite)
             if (result == 0) success = true;
         }
         else TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to open file", fileName);
-#else
-    TRACELOG(LOG_WARNING, "FILEIO: Standard file io not supported, use custom file callback");
-#endif  
     }
     else TRACELOG(LOG_WARNING, "FILEIO: File name provided is not valid");
 
@@ -280,27 +272,21 @@ char *LoadFileText(const char *fileName)
 
     if (fileName != NULL)
     {
-        if (loadFileText) 
-        {
-            text = loadFileText(fileName);
-            return text;
-        }
-#if defined(SUPPORT_STANDARD_FILEIO)
-        FILE *file = fopen(fileName, "rt");
+        FILE *textFile = fopen(fileName, "rt");
 
-        if (file != NULL)
+        if (textFile != NULL)
         {
             // WARNING: When reading a file as 'text' file,
             // text mode causes carriage return-linefeed translation...
             // ...but using fseek() should return correct byte-offset
-            fseek(file, 0, SEEK_END);
-            unsigned int size = (unsigned int)ftell(file);
-            fseek(file, 0, SEEK_SET);
+            fseek(textFile, 0, SEEK_END);
+            unsigned int size = (unsigned int)ftell(textFile);
+            fseek(textFile, 0, SEEK_SET);
 
             if (size > 0)
             {
                 text = (char *)RL_MALLOC((size + 1)*sizeof(char));
-                unsigned int count = (unsigned int)fread(text, sizeof(char), size, file);
+                unsigned int count = (unsigned int)fread(text, sizeof(char), size, textFile);
 
                 // WARNING: \r\n is converted to \n on reading, so,
                 // read bytes count gets reduced by the number of lines
@@ -313,12 +299,9 @@ char *LoadFileText(const char *fileName)
             }
             else TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to read text file", fileName);
 
-            fclose(file);
+            fclose(textFile);
         }
         else TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to open text file", fileName);
-#else
-    TRACELOG(LOG_WARNING, "FILEIO: Standard file io not supported, use custom file callback");
-#endif
     }
     else TRACELOG(LOG_WARNING, "FILEIO: File name provided is not valid");
 
@@ -338,12 +321,6 @@ bool SaveFileText(const char *fileName, char *text)
 
     if (fileName != NULL)
     {
-        if (saveFileText) 
-        {
-            saveFileText(fileName, text);
-            return success;
-        }
-#if defined(SUPPORT_STANDARD_FILEIO)
         FILE *file = fopen(fileName, "wt");
 
         if (file != NULL)
@@ -357,9 +334,6 @@ bool SaveFileText(const char *fileName, char *text)
             if (result == 0) success = true;
         }
         else TRACELOG(LOG_WARNING, "FILEIO: [%s] Failed to open text file", fileName);
-#else
-    TRACELOG(LOG_WARNING, "FILEIO: Standard file io not supported, use custom file callback");
-#endif
     }
     else TRACELOG(LOG_WARNING, "FILEIO: File name provided is not valid");
 

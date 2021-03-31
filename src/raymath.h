@@ -20,7 +20,7 @@
 *
 *   LICENSE: zlib/libpng
 *
-*   Copyright (c) 2015-2021 Ramon Santamaria (@raysan5)
+*   Copyright (c) 2015-2020 Ramon Santamaria (@raysan5)
 *
 *   This software is provided "as-is", without any express or implied warranty. In no event
 *   will the authors be held liable for any damages arising from the use of this software.
@@ -44,6 +44,9 @@
 
 //#define RAYMATH_STANDALONE      // NOTE: To use raymath as standalone lib, just uncomment this line
 //#define RAYMATH_HEADER_ONLY     // NOTE: To compile functions as static inline, uncomment this line
+
+#define MIN(a,b)     (((a)<(b))?(a):(b))
+#include <stdio.h>
 
 #ifndef RAYMATH_STANDALONE
     #include "raylib.h"           // Required for structs: Vector3, Matrix
@@ -71,11 +74,13 @@
     #endif
 #endif
 
+#include <pmmintrin.h> /* SSE3 intrinsics */
+
 //----------------------------------------------------------------------------------
 // Defines and Macros
 //----------------------------------------------------------------------------------
 #ifndef PI
-    #define PI 3.14159265358979323846f
+    #define PI 3.14159265358979323846
 #endif
 
 #ifndef DEG2RAD
@@ -112,6 +117,7 @@
         float x;
         float y;
         float z;
+	      float padding;
     } Vector3;
 
     // Vector4 type
@@ -124,6 +130,12 @@
 
     // Quaternion type
     typedef Vector4 Quaternion;
+
+    // Dual Quaternion type
+    typedef struct DualQuaternion {
+	    Quaternion real;
+	    Quaternion dual;
+    } DualQuaternion;
 
     // Matrix type (OpenGL style 4x4 - right handed, column major)
     typedef struct Matrix {
@@ -160,13 +172,13 @@ RMDEF float Lerp(float start, float end, float amount)
 // Normalize input value within input range
 RMDEF float Normalize(float value, float start, float end)
 {
-    return (value - start)/(end - start);
+    return (value - start) / (end - start);
 }
 
 // Remap input value within input range to output range
 RMDEF float Remap(float value, float inputStart, float inputEnd, float outputStart, float outputEnd)
 {
-    return (value - inputStart)/(inputEnd - inputStart)*(outputEnd - outputStart) + outputStart;
+    return (value - inputStart) / (inputEnd - inputStart) * (outputEnd - outputStart) + outputStart;
 }
 
 //----------------------------------------------------------------------------------
@@ -314,7 +326,7 @@ RMDEF Vector2 Vector2Reflect(Vector2 v, Vector2 normal)
 RMDEF Vector2 Vector2Rotate(Vector2 v, float degs)
 {
     float rads = degs*DEG2RAD;
-    Vector2 result = {v.x*cosf(rads) - v.y*sinf(rads) , v.x*sinf(rads) + v.y*cosf(rads) };
+    Vector2 result = {v.x * cosf(rads) - v.y * sinf(rads) , v.x * sinf(rads) + v.y * cosf(rads) };
     return result;
 }
 
@@ -352,6 +364,19 @@ RMDEF Vector3 Vector3One(void)
 {
     Vector3 result = { 1.0f, 1.0f, 1.0f };
     return result;
+}
+
+// Compare two vectors
+RMDEF int Vector3Cmp(Vector3 u, Vector3 v, float precision)
+{
+	int ret = 0;
+	if (fabs(u.x-v.x) > precision)
+		ret = ret + 1;
+	if (fabs(u.y-v.y) > precision)
+		ret = ret + 1;
+	if (fabs(u.z-v.z) > precision)
+		ret = ret + 1;
+	return ret;
 }
 
 // Add two vectors
@@ -856,14 +881,14 @@ RMDEF Matrix MatrixRotate(Vector3 axis, float angle)
 
     float x = axis.x, y = axis.y, z = axis.z;
 
-    float lengthSquared = x*x + y*y + z*z;
+    float length = sqrtf(x*x + y*y + z*z);
 
-    if ((lengthSquared != 1.0f) && (lengthSquared != 0.0f))
+    if ((length != 1.0f) && (length != 0.0f))
     {
-        float inverseLength = 1.0f/sqrtf(lengthSquared);
-        x *= inverseLength;
-        y *= inverseLength;
-        z *= inverseLength;
+        length = 1.0f/length;
+        x *= length;
+        y *= length;
+        z *= length;
     }
 
     float sinres = sinf(angle);
@@ -954,52 +979,29 @@ RMDEF Matrix MatrixRotateXYZ(Vector3 ang)
     float cosx = cosf(-ang.x);
     float sinx = sinf(-ang.x);
 
-    result.m0 = cosz*cosy;
-    result.m4 = (cosz*siny*sinx) - (sinz*cosx);
-    result.m8 = (cosz*siny*cosx) + (sinz*sinx);
+    result.m0 = cosz * cosy;
+    result.m4 = (cosz * siny * sinx) - (sinz * cosx);
+    result.m8 = (cosz * siny * cosx) + (sinz * sinx);
 
-    result.m1 = sinz*cosy;
-    result.m5 = (sinz*siny*sinx) + (cosz*cosx);
-    result.m9 = (sinz*siny*cosx) - (cosz*sinx);
+    result.m1 = sinz * cosy;
+    result.m5 = (sinz * siny * sinx) + (cosz * cosx);
+    result.m9 = (sinz * siny * cosx) - (cosz * sinx);
 
     result.m2 = -siny;
-    result.m6 = cosy*sinx;
-    result.m10= cosy*cosx;
+    result.m6 = cosy * sinx;
+    result.m10= cosy * cosx;
 
     return result;
 }
 
 // Returns zyx-rotation matrix (angles in radians)
+// TODO: This solution is suboptimal, it should be possible to create this matrix in one go
+// instead of using a 3 matrix multiplication
 RMDEF Matrix MatrixRotateZYX(Vector3 ang)
 {
-    Matrix result = { 0 };
-
-    float cz = cosf(ang.z);
-    float sz = sinf(ang.z);
-    float cy = cosf(ang.y);
-    float sy = sinf(ang.y);
-    float cx = cosf(ang.x);
-    float sx = sinf(ang.x);
-
-    result.m0 = cz*cy;
-    result.m1 = cz*sy*sx - cx*sz;
-    result.m2 = sz*sx + cz*cx*sy;
-    result.m3 = 0;
-
-    result.m4 = cy*sz;
-    result.m5 = cz*cx + sz*sy*sx;
-    result.m6 = cx*sz*sy - cz*sx;
-    result.m7 = 0;
-
-    result.m8 = -sy;
-    result.m9 = cy*sx;
-    result.m10 = cy*cx;
-    result.m11 = 0;
-
-    result.m12 = 0;
-    result.m13 = 0;
-    result.m14 = 0;
-    result.m15 = 1;
+    Matrix result = MatrixRotateZ(ang.z);
+    result = MatrixMultiply(result, MatrixRotateY(ang.y));
+    result = MatrixMultiply(result, MatrixRotateX(ang.x));
 
     return result;
 }
@@ -1185,7 +1187,7 @@ RMDEF Quaternion QuaternionIdentity(void)
 // Computes the length of a quaternion
 RMDEF float QuaternionLength(Quaternion q)
 {
-    float result = sqrtf(q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w);
+    float result = (float)sqrt(q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w);
     return result;
 }
 
@@ -1227,20 +1229,55 @@ RMDEF Quaternion QuaternionInvert(Quaternion q)
     return result;
 }
 
+RMDEF Quaternion QuaternionConj(Quaternion q)
+{
+	Quaternion result = q;
+	result.x = -q.x;
+	result.y = -q.y;
+	result.z = -q.z;
+	result.w = q.w;
+	return result;
+}
+
 // Calculate two quaternion multiplication
 RMDEF Quaternion QuaternionMultiply(Quaternion q1, Quaternion q2)
 {
-    Quaternion result = { 0 };
+	__m128 xyzw = _mm_load_ps(&q1.x); // Quaternion's must be packed and aligned
+	__m128 abcd = _mm_load_ps(&q2.x);
+	Quaternion ret;
 
-    float qax = q1.x, qay = q1.y, qaz = q1.z, qaw = q1.w;
-    float qbx = q2.x, qby = q2.y, qbz = q2.z, qbw = q2.w;
+    /* The product of two quaternions is:                                 */
+    /* (X,Y,Z,W) = (xd+yc-zb+wa, -xc+yd+za+wb, xb-ya+zd+wc, -xa-yb-zc+wd) */
 
-    result.x = qax*qbw + qaw*qbx + qay*qbz - qaz*qby;
-    result.y = qay*qbw + qaw*qby + qaz*qbx - qax*qbz;
-    result.z = qaz*qbw + qaw*qbz + qax*qby - qay*qbx;
-    result.w = qaw*qbw - qax*qbx - qay*qby - qaz*qbz;
+    __m128 wzyx = _mm_shuffle_ps(xyzw, xyzw, _MM_SHUFFLE(0,1,2,3));
+    __m128 baba = _mm_shuffle_ps(abcd, abcd, _MM_SHUFFLE(0,1,0,1));
+    __m128 dcdc = _mm_shuffle_ps(abcd, abcd, _MM_SHUFFLE(2,3,2,3));
 
-    return result;
+    /* variable names below are for parts of componens of result (X,Y,Z,W) */
+    /* nX stands for -X and similarly for the other components             */
+
+    /* znxwy  = (xb - ya, zb - wa, wd - zc, yd - xc) */
+    __m128 ZnXWY = _mm_hsub_ps(_mm_mul_ps(xyzw, baba), _mm_mul_ps(wzyx, dcdc));
+
+    /* xzynw  = (xd + yc, zd + wc, wb + za, yb + xa) */
+    __m128 XZYnW = _mm_hadd_ps(_mm_mul_ps(xyzw, dcdc), _mm_mul_ps(wzyx, baba));
+
+    /* _mm_shuffle_ps(XZYnW, ZnXWY, _MM_SHUFFLE(3,2,1,0)) */
+    /*      = (xd + yc, zd + wc, wd - zc, yd - xc)        */
+    /* _mm_shuffle_ps(ZnXWY, XZYnW, _MM_SHUFFLE(2,3,0,1)) */
+    /*      = (zb - wa, xb - ya, yb + xa, wb + za)        */
+
+    /* _mm_addsub_ps adds elements 1 and 3 and subtracts elements 0 and 2, so we get: */
+    /* _mm_addsub_ps(*, *) = (xd+yc-zb+wa, xb-ya+zd+wc, wd-zc+yb+xa, yd-xc+wb+za)     */
+
+    __m128 XZWY = _mm_addsub_ps(_mm_shuffle_ps(XZYnW, ZnXWY, _MM_SHUFFLE(3,2,1,0)),
+                                _mm_shuffle_ps(ZnXWY, XZYnW, _MM_SHUFFLE(2,3,0,1)));
+
+    /* now we only need to shuffle the components in place and return the result      */
+    _mm_store_ps( &ret.x, _mm_shuffle_ps(XZWY, XZWY, _MM_SHUFFLE(2,1,3,0)) );
+
+    /* operations: 6 shuffles, 4 multiplications, 3 compound additions/subtractions   (make sure -msse3 -O3 is set in compile) */
+	return ret;
 }
 
 // Scale quaternion by float value
@@ -1250,10 +1287,10 @@ RMDEF Quaternion QuaternionScale(Quaternion q, float mul)
 
     float qax = q.x, qay = q.y, qaz = q.z, qaw = q.w;
 
-    result.x = qax*mul + qaw*mul + qay*mul - qaz*mul;
-    result.y = qay*mul + qaw*mul + qaz*mul - qax*mul;
-    result.z = qaz*mul + qaw*mul + qax*mul - qay*mul;
-    result.w = qaw*mul - qax*mul - qay*mul - qaz*mul;
+    result.x = qax * mul + qaw * mul + qay * mul - qaz * mul;
+    result.y = qay * mul + qaw * mul + qaz * mul - qax * mul;
+    result.z = qaz * mul + qaw * mul + qax * mul - qay * mul;
+    result.w = qaw * mul - qax * mul - qay * mul - qaz * mul;
 
     return result;
 }
@@ -1261,7 +1298,7 @@ RMDEF Quaternion QuaternionScale(Quaternion q, float mul)
 // Divide two quaternions
 RMDEF Quaternion QuaternionDivide(Quaternion q1, Quaternion q2)
 {
-    Quaternion result = { q1.x/q2.x, q1.y/q2.y, q1.z/q2.z, q1.w/q2.w };
+    Quaternion result = {q1.x / q2.x, q1.y / q2.y, q1.z / q2.z, q1.w / q2.w};
     return result;
 }
 
@@ -1293,12 +1330,6 @@ RMDEF Quaternion QuaternionSlerp(Quaternion q1, Quaternion q2, float amount)
     Quaternion result = { 0 };
 
     float cosHalfTheta =  q1.x*q2.x + q1.y*q2.y + q1.z*q2.z + q1.w*q2.w;
-
-    if (cosHalfTheta < 0)
-    {
-        q2.x = -q2.x; q2.y = -q2.y; q2.z = -q2.z; q2.w = -q2.w;
-        cosHalfTheta = -cosHalfTheta;
-    }
 
     if (fabs(cosHalfTheta) >= 1.0f) result = q1;
     else if (cosHalfTheta > 0.95f) result = QuaternionNlerp(q1, q2, amount);
@@ -1389,23 +1420,39 @@ RMDEF Quaternion QuaternionFromMatrix(Matrix mat)
 RMDEF Matrix QuaternionToMatrix(Quaternion q)
 {
     Matrix result = MatrixIdentity();
+// Not sure why this way below, but it seems "off" so I just rewrote it the way I expect it to work
+//    float a2 = 2*(q.x*q.x), b2=2*(q.y*q.y), c2=2*(q.z*q.z)//    , d2=2*(q.w*q.w);
+//
+//    float ab = 2*(q.x*q.y), ac=2*(q.x*q.z), bc=2*(q.y*q.z);
+//    float ad = 2*(q.x*q.w), bd=2*(q.y*q.w), cd=2*(q.z*q.w);
+//    result.m0 = 1 - b2 - c2;
+//    result.m1 = ab - cd;
+//    result.m2 = ac + bd;
+//
+//    result.m4 = ab + cd;
+//    result.m5 = 1 - a2 - c2;
+//    result.m6 = bc - ad;
+//
+//    result.m8 = ac - bd;
+//    result.m9 = bc + ad;
+//    result.m10 = 1 - a2 - b2;
 
-    float a2 = 2*(q.x*q.x), b2=2*(q.y*q.y), c2=2*(q.z*q.z); //, d2=2*(q.w*q.w);
+    float x2 = (q.x*q.x), y2 = (q.y*q.y), z2 = (q.z*q.z), w2 = (q.w*q.w);
 
-    float ab = 2*(q.x*q.y), ac=2*(q.x*q.z), bc=2*(q.y*q.z);
-    float ad = 2*(q.x*q.w), bd=2*(q.y*q.w), cd=2*(q.z*q.w);
+    float xy = 2*(q.x*q.y), xz = 2*(q.x*q.z), yz = 2*(q.y*q.z);
+    float xw = 2*(q.x*q.w), yw = 2*(q.y*q.w), zw = 2*(q.z*q.w);
 
-    result.m0 = 1 - b2 - c2;
-    result.m1 = ab - cd;
-    result.m2 = ac + bd;
+    result.m0 = x2 + w2 - y2 - z2;
+    result.m1 = zw + xy;
+    result.m2 = -yw + xz;
 
-    result.m4 = ab + cd;
-    result.m5 = 1 - a2 - c2;
-    result.m6 = bc - ad;
+    result.m4 = xy - zw;
+    result.m5 = w2 - x2 + y2 - z2;
+    result.m6 = xw + yz;
 
-    result.m8 = ac - bd;
-    result.m9 = bc + ad;
-    result.m10 = 1 - a2 - b2;
+    result.m8 = xz + yw;
+    result.m9 = -xw + yz;
+    result.m10 = w2 - x2 - y2 + z2;
 
     return result;
 }
@@ -1461,18 +1508,17 @@ RMDEF void QuaternionToAxisAngle(Quaternion q, Vector3 *outAxis, float *outAngle
     *outAngle = resAngle;
 }
 
-// Returns the quaternion equivalent to Euler angles
-// NOTE: Rotation order is ZYX
-RMDEF Quaternion QuaternionFromEuler(float pitch, float yaw, float roll)
+// Returns he quaternion equivalent to Euler angles
+RMDEF Quaternion QuaternionFromEuler(float roll, float pitch, float yaw)
 {
     Quaternion q = { 0 };
 
-    float x0 = cosf(pitch*0.5f);
-    float x1 = sinf(pitch*0.5f);
-    float y0 = cosf(yaw*0.5f);
-    float y1 = sinf(yaw*0.5f);
-    float z0 = cosf(roll*0.5f);
-    float z1 = sinf(roll*0.5f);
+    float x0 = cosf(roll*0.5f);
+    float x1 = sinf(roll*0.5f);
+    float y0 = cosf(pitch*0.5f);
+    float y1 = sinf(pitch*0.5f);
+    float z0 = cosf(yaw*0.5f);
+    float z1 = sinf(yaw*0.5f);
 
     q.x = x1*y0*z0 - x0*y1*z1;
     q.y = x0*y1*z0 + x1*y0*z1;
@@ -1541,6 +1587,133 @@ RMDEF Vector3 Vector3Unproject(Vector3 source, Matrix projection, Matrix view)
     result.z = quat.z/quat.w;
 
     return result;
+}
+
+//----------------------------------------------------------------------------------
+// Module Functions Definition - Dual Quaternion math
+//----------------------------------------------------------------------------------
+
+RMDEF DualQuaternion DualQuaternionCreate(const Quaternion r, const Vector3 dd)
+{
+	DualQuaternion dq;
+
+	dq.real = r;
+	dq.dual.x =  0.5f*( dd.x * r.w + dd.y * r.z - dd.z * r.y);
+	dq.dual.y =  0.5f*(-dd.x * r.z + dd.y * r.w + dd.z * r.x);
+	dq.dual.z =  0.5f*( dd.x * r.y - dd.y * r.x + dd.z * r.w);
+	dq.dual.w = -0.5f*( dd.x * r.x + dd.y * r.y + dd.z * r.z);
+//	dq.dual.x = dd.x;
+//	dq.dual.y = dd.y;
+//	dq.dual.z = dd.z;
+//	dq.dual.w = 0.0f;
+//
+//	dq.dual = QuaternionMultiply(dq.real, dq.dual);
+//	dq.dual = QuaternionScale(dq.dual, 0.5f);
+
+
+	return dq;
+}
+
+RMDEF DualQuaternion DualQuaternionNormalize(const DualQuaternion q)
+{
+	DualQuaternion dq;
+
+	float length, ilength;
+	length = QuaternionLength(q.real);
+	if (length == 0.0f) length = 1.0f;
+	ilength = 1.0f/length;
+
+	dq.real.x = q.real.x*ilength;
+	dq.real.y = q.real.y*ilength;
+	dq.real.z = q.real.z*ilength;
+	dq.real.w = q.real.w*ilength;
+	dq.dual.x = q.dual.x*ilength;
+	dq.dual.y = q.dual.y*ilength;
+	dq.dual.z = q.dual.z*ilength;
+	dq.dual.w = q.dual.w*ilength;
+	return dq;
+}
+
+RMDEF Matrix DualQuaternionToMatrix(DualQuaternion q)
+{
+	DualQuaternion dq = q; //DualQuaternionNormalize(q);
+
+	// get rotation
+	Matrix m = QuaternionToMatrix(dq.real);
+
+	// get translation info
+	m.m12 = 2.0f * (-dq.dual.w*dq.real.x + dq.dual.x*dq.real.w - dq.dual.y*dq.real.z + dq.dual.z*dq.real.y);
+	m.m13 = 2.0f * (-dq.dual.w*dq.real.y + dq.dual.x*dq.real.z + dq.dual.y*dq.real.w - dq.dual.z*dq.real.x);
+	m.m14 = 2.0f * (-dq.dual.w*dq.real.z - dq.dual.x*dq.real.y + dq.dual.y*dq.real.x + dq.dual.z*dq.real.w);
+
+	return m;
+}
+
+RMDEF DualQuaternion DualQuaternionInvert(const DualQuaternion q)
+{
+	DualQuaternion dq;
+
+	Matrix m = DualQuaternionToMatrix(q);
+	Matrix im = MatrixInvert(m);
+
+	//dq.real = QuaternionInvert(q.real);
+	dq.real = QuaternionFromMatrix(im);
+
+	Vector3 t = { im.m12, im.m13, im.m14, 0.0f };//
+	dq = DualQuaternionCreate(dq.real, t);
+
+	return dq;
+}
+
+RMDEF DualQuaternion DualQuaternionMultiply(const DualQuaternion q, const DualQuaternion p)
+{
+	DualQuaternion dq;
+
+	// q * p
+	Quaternion r = QuaternionMultiply(q.real, p.real);
+
+	// TODO: below not working but should?
+	//Quaternion d = QuaternionAdd(QuaternionMultiply(q.real, p.dual), QuaternionMultiply(q.dual, p.real));
+
+	float qrx = q.real.x;
+	float qry = q.real.y;
+	float qrz = q.real.z;
+	float qrw = q.real.w;
+	float qdx = q.dual.x;
+	float qdy = q.dual.y;
+	float qdz = q.dual.z;
+	float qdw = q.dual.w;
+	float prx = p.real.x;
+	float pry = p.real.y;
+	float prz = p.real.z;
+	float prw = p.real.w;
+	float pdx = p.dual.x;
+	float pdy = p.dual.y;
+	float pdz = p.dual.z;
+	float pdw = p.dual.w;
+
+	float a2 = 2*(prx*prx), b2=2*(pry*pry), c2=2*(prz*prz);
+	float ab = 2*(prx*pry), ac=2*(prx*prz), bc=2*(pry*prz);
+	float ad = 2*(prx*prw), bd=2*(pry*prw), cd=2*(prz*prw);
+
+	float qddx = (-qdw*qrx + qdx*qrw - qdy*qrz + qdz*qry);
+	float qddy = (-qdw*qry + qdx*qrz + qdy*qrw - qdz*qrx);
+	float qddz = (-qdw*qrz - qdx*qry + qdy*qrx + qdz*qrw);
+
+	Vector3 t;
+	t.x = (-pdw*prx + pdx*prw - pdy*prz + pdz*pry) + qddx*(1-b2-c2) + qddy*(ab+cd) + qddz*(ac-bd);
+	t.y = (-pdw*pry + pdx*prz + pdy*prw - pdz*prx) + qddx*(ab-cd) + qddy*(1-a2-c2) + qddz*(bc+ad);
+	t.z = (-pdw*prz - pdx*pry + pdy*prx + pdz*prw) + qddx*(ac+bd) + qddy*(bc-ad) + qddz*(1-a2-b2);
+
+  Quaternion d;
+  d.x = (t.x*r.w + t.y*r.z - t.z*r.y)  ;
+  d.y = (t.y*r.w + t.z*r.x - t.x*r.z)  ;
+  d.z = (t.z*r.w + t.x*r.y - t.y*r.x)  ;
+  d.w = (-t.x*r.x - t.y*r.y - t.z*r.z) ;
+
+	dq.real = r;
+	dq.dual = d;
+	return dq;
 }
 
 #endif  // RAYMATH_H
