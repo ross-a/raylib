@@ -224,7 +224,7 @@ typedef struct _XINPUT_BATTERY_INFORMATION
 extern "C" {
 #endif
 
-void WINAPI XInputEnable(WINBOOL);
+	void WINAPI XInputEnable(int);  // rl. changed WINBOOL to int
 DWORD WINAPI XInputSetState(DWORD, XINPUT_VIBRATION*);
 DWORD WINAPI XInputGetState(DWORD, XINPUT_STATE*);
 DWORD WINAPI XInputGetKeystroke(DWORD, DWORD, PXINPUT_KEYSTROKE);
